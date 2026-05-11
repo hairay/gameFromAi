@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>水果連連看 — Sage的遊戲大廳</title>
+  <link rel="stylesheet" href="/static/shared/style.css">
+  <style>
+    .board-panel { padding: 18px; position: relative; }
+    .board-area {
+      background: linear-gradient(180deg, #162a1e 0%, #0d1f14 100%);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 360px;
+      position: relative;
+    }
+    #game-container {
+      display: grid;
+      gap: 4px;
+      position: relative;
+    }
+    #line-canvas {
+      position: absolute;
+      top: 0; left: 0;
+      pointer-events: none;
+      z-index: 10;
+      background: none !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      max-width: none !important;
+      max-height: none !important;
+      touch-action: none;
+    }
+    .tile {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.35), inset 0 -2px 4px rgba(0,0,0,0.1);
+      border: 1.5px solid rgba(255,255,255,0.12);
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.3s ease;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .tile:hover:not(.empty) {
+      transform: scale(1.06);
+      box-shadow: 0 6px 14px rgba(0,0,0,0.45);
+    }
+    .tile.selected {
+      transform: scale(1.12) rotate(5deg);
+      box-shadow: 0 0 0 3px rgba(255,215,0,0.7), 0 8px 16px rgba(0,0,0,0.4);
+    }
+    .tile.matched {
+      animation: matchFadeOut 0.5s ease forwards;
+      pointer-events: none;
+    }
+    .tile.empty {
+      background-color: transparent !important;
+      box-shadow: none;
+      border-color: transparent;
+      pointer-events: none;
+      font-size: 0 !important;
+      opacity: 0;
+    }
+    .tile.hint-glow {
+      animation: hintPulse 0.6s ease-in-out 3;
+    }
+    .tile.init {
+      animation: fadeInFall 0.4s ease forwards;
+      animation-delay: calc(0.06s * (var(--row) + var(--col)));
+    }
+
+    /* Tile backgrounds */
+    .tile.apple      { background-color: #3d2020; }
+    .tile.banana     { background-color: #3d3820; }
+    .tile.watermelon { background-color: #1e3d20; }
+    .tile.grape      { background-color: #2e1e3d; }
+    .tile.lion       { background-color: #3d3020; }
+    .tile.monkey     { background-color: #2a2a2a; }
+    .tile.elephant   { background-color: #1e3035; }
+    .tile.fox        { background-color: #3d2518; }
+
+    @keyframes matchFadeOut {
+      0% { opacity: 1; transform: scale(1) rotate(0deg); }
+      50% { opacity: 0.5; transform: scale(1.25) rotate(15deg); }
+      100% { opacity: 0; transform: scale(0) rotate(30deg); }
+    }
+    @keyframes fadeInFall {
+      0% { opacity: 0; transform: translateY(-40px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes hintPulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(255,215,0,0.4); }
+      50% { box-shadow: 0 0 0 5px rgba(255,215,0,0.8), 0 0 16px rgba(255,215,0,0.3); }
+    }
+
+    /* Overlay */
+    #overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.72);
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      border-radius: 16px; color: #fff;
+      gap: 12px; z-index: 20;
+    }
+    #overlay.show { display: flex; }
+    #overlay .big { font-size: 2rem; font-weight: 800; }
+    #overlay .sub { font-size: 0.95rem; color: #bbb; text-align: center; padding: 0 16px; }
+    #overlay button { margin-top: 8px; padding: 10px 28px; font-size: 15px; }
+
+    /* Combo popup */
+    .combo-popup {
+      position: absolute;
+      font-size: 1.5rem; font-weight: 900;
+      color: #ffd700;
+      text-shadow: 0 2px 8px rgba(255,215,0,0.5);
+      pointer-events: none;
+      animation: comboFloat 1s ease-out forwards;
+      z-index: 30;
+    }
+    @keyframes comboFloat {
+      0% { opacity: 1; transform: translateY(0) scale(1); }
+      100% { opacity: 0; transform: translateY(-40px) scale(1.3); }
+    }
+
+    /* Save indicator */
+    .save-flash {
+      position: absolute; bottom: 8px; right: 12px;
+      font-size: 12px; color: rgba(141,183,255,0.7);
+      animation: saveBlink 1s ease forwards;
+      z-index: 5;
+    }
+    @keyframes saveBlink {
+      0% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    /* Status grid */
+    .status {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 12px;
+    }
+    .stat-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 14px; color: var(--muted);
+    }
+    .stat-item strong { color: var(--text); font-size: 16px; }
+
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; }
+      .side-panel { order: -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel board-panel">
+      <div class="board-area">
+        <div id="game-container"></div>
+        <div id="overlay">
+          <div class="big" id="overlayTitle"></div>
+          <div class="sub" id="overlaySub"></div>
+          <button onclick="newGame()">再來一局</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel side-panel">
+      <a href="/" style="color:var(--muted);font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:4px;margin-bottom:4px">← 返回大廳</a>
+      <h1>🍎 水果連連看</h1>
+      <div class="subtitle">找出相同的圖案，用不超過兩次轉彎的路線連接消除</div>
+      <div class="controls">
+        <div class="row">
+          <button onclick="newGame()">新遊戲</button>
+          <button id="btnContinue" class="secondary" onclick="continueGame()" style="display:none">繼續遊戲</button>
+        </div>
+        <div class="row">
+          <button class="secondary" onclick="useHint()">💡 提示</button>
+          <button class="secondary" onclick="useShuffle()">🔀 洗牌</button>
+        </div>
+      </div>
+      <div class="status">
+        <div class="stat-item"><span>📊 關卡</span><strong id="sLevel">1</strong></div>
+        <div class="stat-item"><span>⏱️ 時間</span><strong id="sTimer">00:00</strong></div>
+        <div class="stat-item"><span>🎯 分數</span><strong id="sScore">0</strong></div>
+        <div class="stat-item"><span>🔥 連擊</span><strong id="sCombo">0</strong></div>
+        <div class="stat-item"><span>🧩 剩餘</span><strong id="sRemain">0</strong></div>
+        <div class="stat-item"><span>💡 提示</span><strong id="sHints">3</strong></div>
+      </div>
+      <div class="legend">
+        <div><strong>圖案</strong></div>
+        <div style="font-size:22px;letter-spacing:6px">🍎🍌🍉🍇🦁🐒🐘🦊</div>
+        <div style="margin-top:8px"><strong>規則</strong></div>
+        <div style="font-size:13px;line-height:1.7">
+          點擊兩個相同圖案，若能用<b>不超過兩次轉彎</b>的路線連接，即可消除。<br>
+          過關自動進入下一關，共 5 關。<br>
+          遊戲進度會自動存檔。
+        </div>
+      </div>
+      <a href="/" class="pill" style="margin-top:8px;text-decoration:none">
+        <span class="dot"></span> 返回大廳
+      </a>
+    </div>
+  </div>
+
+<script>
+const SAVE_KEY = 'sage-linkgame-save';
+
+const LEVELS = [
+  { rows: 3, cols: 4 },
+  { rows: 4, cols: 6 },
+  { rows: 5, cols: 6 },
+  { rows: 6, cols: 8 },
+  { rows: 7, cols: 8 },
+];
+
+const PATTERNS = ['🍎','🍌','🍉','🍇','🦁','🐒','🐘','🦊'];
+const PAT_CLASS = {
+  '🍎':'apple','🍌':'banana','🍉':'watermelon','🍇':'grape',
+  '🦁':'lion','🐒':'monkey','🐘':'elephant','🦊':'fox',
+};
+
+let currentLevel = 0;
+let board = [];
+let rows = 0, cols = 0;
+let selected = null;
+let tileElements = [];
+let canvas, ctx;
+let particles = [];
+
+let score = 0, combo = 0, lastMatch = 0;
+let seconds = 0, timerIv = null;
+let hintsLeft = 3, shufflesLeft = 2;
+let gameActive = false;
+let tileSize = 60;
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+}
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60);
+  return `${String(m).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
+
+function computeTileSize() {
+  const maxW = Math.min(window.innerWidth < 980 ? window.innerWidth - 60 : window.innerWidth - 400, 700);
+  const maxH = Math.min(window.innerHeight - 100, 560);
+  const gap = 4;
+  let tw = Math.floor((maxW - (cols - 1) * gap) / cols);
+  let th = Math.floor((maxH - (rows - 1) * gap) / rows);
+  return Math.max(Math.min(tw, th, 65), 36);
+}
+
+// ── Path finding (from eden-chen-ehen/link-game) ──
+
+function isEmpty(r, c) {
+  if (r < 0 || r >= rows || c < 0 || c >= cols) return false;
+  return board[r][c] === null;
+}
+
+function checkLine(r1, c1, r2, c2) {
+  if (r1 === r2) {
+    for (let c = Math.min(c1,c2)+1; c < Math.max(c1,c2); c++)
+      if (!isEmpty(r1, c)) return false;
+    return true;
+  }
+  if (c1 === c2) {
+    for (let r = Math.min(r1,r2)+1; r < Math.max(r1,r2); r++)
+      if (!isEmpty(r, c1)) return false;
+    return true;
+  }
+  return false;
+}
+
+function canConnect(r1, c1, r2, c2) {
+  if ((r1 === r2 && Math.abs(c1-c2) === 1) || (c1 === c2 && Math.abs(r1-r2) === 1)) return true;
+  if (checkLine(r1,c1,r2,c2)) return true;
+  const corners = [[r1,c2],[r2,c1]];
+  for (const [cr,cc] of corners)
+    if (cr>=0 && cr<rows && cc>=0 && cc<cols && isEmpty(cr,cc) && checkLine(r1,c1,cr,cc) && checkLine(cr,cc,r2,c2)) return true;
+  for (let c=0;c<cols;c++)
+    if (checkLine(r1,c1,r1,c) && isEmpty(r1,c) && checkLine(r2,c2,r2,c) && isEmpty(r2,c) && checkLine(r1,c,r2,c)) return true;
+  for (let r=0;r<rows;r++)
+    if (checkLine(r1,c1,r,c1) && isEmpty(r,c1) && checkLine(r2,c2,r,c2) && isEmpty(r,c2) && checkLine(r,c1,r,c2)) return true;
+  return false;
+}
+
+function getConnectionPath(r1, c1, r2, c2) {
+  if (checkLine(r1,c1,r2,c2)) return [[r1,c1],[r2,c2]];
+  const corners = [[r1,c2],[r2,c1]];
+  for (const [cr,cc] of corners)
+    if (cr>=0 && cr<rows && cc>=0 && cc<cols && isEmpty(cr,cc) && checkLine(r1,c1,cr,cc) && checkLine(cr,cc,r2,c2))
+      return [[r1,c1],[cr,cc],[r2,c2]];
+  for (let c=0;c<cols;c++)
+    if (checkLine(r1,c1,r1,c) && isEmpty(r1,c) && checkLine(r2,c2,r2,c) && isEmpty(r2,c) && checkLine(r1,c,r2,c))
+      return [[r1,c1],[r1,c],[r2,c],[r2,c2]];
+  for (let r=0;r<rows;r++)
+    if (checkLine(r1,c1,r,c1) && isEmpty(r,c1) && checkLine(r2,c2,r,c2) && isEmpty(r,c2) && checkLine(r,c1,r,c2))
+      return [[r1,c1],[r,c1],[r,c2],[r2,c2]];
+  return null;
+}
+
+// ── Canvas / animation ──
+
+const CELL_GAP = 4;
+function gridToPixel(r, c) {
+  const step = tileSize + CELL_GAP;
+  return { x: c * step + tileSize / 2, y: r * step + tileSize / 2 };
+}
+
+let activeLine = null; // { path, t0, cb, fired }
+let renderStarted = false;
+
+function setupCanvas() {
+  const container = document.getElementById('game-container');
+  canvas = document.getElementById('line-canvas');
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.id = 'line-canvas';
+    container.appendChild(canvas);
+  }
+  ctx = canvas.getContext('2d');
+  resizeCanvas();
+  if (!renderStarted) { renderStarted = true; requestAnimationFrame(renderLoop); }
+}
+
+function resizeCanvas() {
+  if (!canvas) return;
+  const container = document.getElementById('game-container');
+  const rect = container.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+}
+
+function drawConnectionLine(path, progress) {
+  if (progress <= 0) return;
+  const cumDist = [0];
+  for (let i = 1; i < path.length; i++) {
+    const dx = path[i].x - path[i-1].x, dy = path[i].y - path[i-1].y;
+    cumDist[i] = cumDist[i-1] + Math.sqrt(dx*dx + dy*dy);
+  }
+  const total = cumDist[path.length-1];
+  const target = progress * total;
+  ctx.strokeStyle = '#ffd700';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = '#ffeb3b';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.moveTo(path[0].x, path[0].y);
+  for (let i = 1; i < path.length; i++) {
+    if (cumDist[i] > target) {
+      const f = (target - cumDist[i-1]) / (cumDist[i] - cumDist[i-1]);
+      ctx.lineTo(path[i-1].x + f*(path[i].x-path[i-1].x), path[i-1].y + f*(path[i].y-path[i-1].y));
+      break;
+    } else {
+      ctx.lineTo(path[i].x, path[i].y);
+    }
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+function animateConnectionLine(path, cb) {
+  activeLine = { path, t0: performance.now(), cb, fired: false };
+}
+
+// ── Particles ──
+
+class Particle {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.vx = (Math.random()-0.5)*10;
+    this.vy = (Math.random()-0.5)*10;
+    this.r = Math.random()*3+2;
+    this.alpha = 1;
+    this.life = Math.random()*0.5+0.4;
+    this.t0 = performance.now();
+  }
+  update() {
+    this.x += this.vx; this.y += this.vy; this.vy += 0.5;
+    this.alpha = 1 - (performance.now()-this.t0)/(this.life*1000);
+    return this.alpha > 0;
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,215,0,${this.alpha})`;
+    ctx.fill();
+  }
+}
+
+function createExplosion(x, y, n=15) {
+  for (let i=0;i<n;i++) particles.push(new Particle(x,y));
+}
+
+function renderLoop() {
+  if (!ctx) { requestAnimationFrame(renderLoop); return; }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (activeLine) {
+    const p = Math.min((performance.now() - activeLine.t0) / 500, 1);
+    drawConnectionLine(activeLine.path, 1 - Math.pow(1 - p, 3));
+    if (p >= 1 && !activeLine.fired) {
+      activeLine.fired = true;
+      setTimeout(() => { const cb = activeLine.cb; activeLine = null; cb(); }, 120);
+    }
+  }
+
+  particles = particles.filter(p => { if (p.update()) { p.draw(); return true; } return false; });
+  requestAnimationFrame(renderLoop);
+}
+
+// ── Find hint ──
+
+function findHint() {
+  const map = new Map();
+  for (let r=0;r<rows;r++)
+    for (let c=0;c<cols;c++) {
+      const p = board[r][c];
+      if (p !== null) {
+        if (!map.has(p)) map.set(p,[]);
+        map.get(p).push({r,c});
+      }
+    }
+  for (const positions of map.values())
+    for (let i=0;i<positions.length;i++)
+      for (let j=i+1;j<positions.length;j++)
+        if (canConnect(positions[i].r,positions[i].c,positions[j].r,positions[j].c))
+          return [positions[i], positions[j]];
+  return null;
+}
+
+function tileCount() {
+  let n=0;
+  for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) if (board[r][c]!==null) n++;
+  return n;
+}
+
+// ── Save / Load ──
+
+function saveGame() {
+  const state = {
+    v: 1, currentLevel, board, score, seconds, hintsLeft, shufflesLeft,
+  };
+  localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  const area = document.querySelector('.board-area');
+  const ind = document.createElement('div');
+  ind.className = 'save-flash';
+  ind.textContent = '💾 已存檔';
+  area.appendChild(ind);
+  setTimeout(() => ind.remove(), 1200);
+}
+
+function loadSave() {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function clearSave() {
+  localStorage.removeItem(SAVE_KEY);
+  updateContinueBtn();
+}
+
+function updateContinueBtn() {
+  const btn = document.getElementById('btnContinue');
+  const save = loadSave();
+  if (save) {
+    btn.textContent = `繼續 (關卡${save.currentLevel+1})`;
+    btn.disabled = false;
+    btn.style.display = '';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+// ── Game init ──
+
+function newGame() {
+  clearSave();
+  currentLevel = 0;
+  score = 0;
+  seconds = 0;
+  combo = 0;
+  hintsLeft = 3;
+  shufflesLeft = 2;
+  initLevel(true);
+}
+
+function continueGame() {
+  const save = loadSave();
+  if (!save) { newGame(); return; }
+  currentLevel = save.currentLevel;
+  score = save.score || 0;
+  seconds = save.seconds || 0;
+  combo = 0;
+  hintsLeft = save.hintsLeft ?? 3;
+  shufflesLeft = save.shufflesLeft ?? 2;
+  const cfg = LEVELS[currentLevel];
+  rows = cfg.rows; cols = cfg.cols;
+  board = save.board;
+  startLevel(true);
+}
+
+function initLevel(initial) {
+  const cfg = LEVELS[currentLevel];
+  rows = cfg.rows; cols = cfg.cols;
+  const total = rows * cols;
+  const tiles = [];
+  for (let i = 0; i < total / 2; i++) {
+    const p = PATTERNS[i % PATTERNS.length];
+    tiles.push(p, p);
+  }
+  shuffle(tiles);
+  board = [];
+  let idx = 0;
+  for (let r=0;r<rows;r++) {
+    board[r] = [];
+    for (let c=0;c<cols;c++) board[r][c] = tiles[idx++];
+  }
+  startLevel(initial);
+}
+
+function startLevel(initial) {
+  selected = null;
+  gameActive = true;
+  tileSize = computeTileSize();
+  document.getElementById('overlay').classList.remove('show');
+  renderBoard(true);
+  setupCanvas();
+  resizeCanvas();
+  if (timerIv) clearInterval(timerIv);
+  timerIv = setInterval(() => {
+    if (!gameActive) return;
+    seconds++;
+    document.getElementById('sTimer').textContent = fmtTime(seconds);
+  }, 1000);
+  updateUI();
+  updateContinueBtn();
+
+  setTimeout(() => {
+    if (!findHint() && tileCount() > 0) useShuffle();
+  }, 600);
+}
+
+// ── Render ──
+
+function renderBoard(initial) {
+  const container = document.getElementById('game-container');
+  const step = tileSize + CELL_GAP;
+  container.style.gridTemplateColumns = `repeat(${cols}, ${tileSize}px)`;
+  container.style.gridTemplateRows = `repeat(${rows}, ${tileSize}px)`;
+  container.style.gap = CELL_GAP + 'px';
+
+  if (initial) {
+    const oldCanvas = document.getElementById('line-canvas');
+    container.innerHTML = '';
+    if (oldCanvas) container.appendChild(oldCanvas);
+    tileElements = [];
+    for (let r=0;r<rows;r++) {
+      for (let c=0;c<cols;c++) {
+        const el = document.createElement('div');
+        el.className = 'tile';
+        el.style.width = tileSize + 'px';
+        el.style.height = tileSize + 'px';
+        el.style.fontSize = Math.round(tileSize * 0.6) + 'px';
+        el.dataset.r = r;
+        el.dataset.c = c;
+        el.style.setProperty('--row', r);
+        el.style.setProperty('--col', c);
+        container.appendChild(el);
+        tileElements.push(el);
+      }
+    }
+    container.addEventListener('click', onBoardClick);
+  }
+
+  tileElements.forEach(el => {
+    const r = +el.dataset.r, c = +el.dataset.c;
+    const p = board[r][c];
+    el.classList.remove('matched','init','selected','hint-glow','empty',
+      ...Object.values(PAT_CLASS));
+    if (p === null) {
+      el.classList.add('empty');
+      el.textContent = '';
+    } else {
+      el.textContent = p;
+      const cls = PAT_CLASS[p];
+      if (cls) el.classList.add(cls);
+      if (initial) el.classList.add('init');
+    }
+  });
+
+  if (initial) resizeCanvas();
+}
+
+function getCell(r, c) {
+  return tileElements[r * cols + c];
+}
+
+// ── Click handler ──
+
+function onBoardClick(e) {
+  const tile = e.target.closest('.tile');
+  if (!tile || tile.classList.contains('empty') || !gameActive) return;
+  const r = +tile.dataset.r, c = +tile.dataset.c;
+
+  if (selected) {
+    const { r: sr, c: sc, el: sEl } = selected;
+    if (sr === r && sc === c) {
+      sEl.classList.remove('selected');
+      selected = null;
+      return;
+    }
+    if (board[sr][sc] === board[r][c] && canConnect(sr, sc, r, c)) {
+      sEl.classList.remove('selected');
+      const pathGrid = getConnectionPath(sr, sc, r, c);
+      const pathPx = pathGrid.map(([pr,pc]) => gridToPixel(pr,pc));
+      gameActive = false;
+      animateConnectionLine(pathPx, () => {
+        sEl.classList.add('matched');
+        tile.classList.add('matched');
+        const p1 = gridToPixel(sr,sc), p2 = gridToPixel(r,c);
+        createExplosion(p1.x, p1.y);
+        createExplosion(p2.x, p2.y);
+
+        const now = Date.now();
+        if (now - lastMatch < 3000) combo++; else combo = 1;
+        lastMatch = now;
+        score += 10 * combo;
+        if (combo > 1) showCombo(tile, combo, 10*combo);
+
+        setTimeout(() => {
+          board[sr][sc] = null;
+          board[r][c] = null;
+          renderBoard(false);
+          selected = null;
+          gameActive = true;
+          updateUI();
+          saveGame();
+          checkWin();
+        }, 500);
+      });
+      return;
+    } else {
+      sEl.classList.remove('selected');
+      selected = null;
+    }
+  }
+
+  document.querySelectorAll('.tile.selected').forEach(t => t.classList.remove('selected'));
+  tile.classList.add('selected');
+  selected = { r, c, el: tile };
+}
+
+function showCombo(refEl, c, pts) {
+  const popup = document.createElement('div');
+  popup.className = 'combo-popup';
+  popup.textContent = `${c}x +${pts}`;
+  const area = document.querySelector('.board-area');
+  const rect = refEl.getBoundingClientRect();
+  const aRect = area.getBoundingClientRect();
+  popup.style.left = (rect.left - aRect.left + rect.width/2) + 'px';
+  popup.style.top = (rect.top - aRect.top - 10) + 'px';
+  area.appendChild(popup);
+  setTimeout(() => popup.remove(), 1000);
+}
+
+// ── Win / deadlock ──
+
+function checkWin() {
+  if (tileCount() === 0) {
+    if (currentLevel < LEVELS.length - 1) {
+      currentLevel++;
+      hintsLeft = Math.min(hintsLeft + 1, 5);
+      shufflesLeft = Math.min(shufflesLeft + 1, 3);
+      saveGame();
+      setTimeout(() => initLevel(true), 1200);
+    } else {
+      gameActive = false;
+      clearInterval(timerIv);
+      clearSave();
+      document.getElementById('overlayTitle').textContent = '🎉 恭喜全部通關！';
+      document.getElementById('overlaySub').textContent = `分數：${score}　時間：${fmtTime(seconds)}`;
+      document.getElementById('overlay').classList.add('show');
+    }
+    return;
+  }
+
+  if (!findHint()) {
+    if (shufflesLeft > 0) {
+      useShuffle();
+    } else {
+      gameActive = false;
+      clearInterval(timerIv);
+      clearSave();
+      document.getElementById('overlayTitle').textContent = '😢 無解了';
+      document.getElementById('overlaySub').textContent = `分數：${score}　剩餘：${tileCount()} 張`;
+      document.getElementById('overlay').classList.add('show');
+    }
+  }
+}
+
+// ── Hint / Shuffle ──
+
+function useHint() {
+  if (!gameActive || hintsLeft <= 0) return;
+  const pair = findHint();
+  if (!pair) return;
+  hintsLeft--;
+  score = Math.max(0, score - 5);
+  const c1 = getCell(pair[0].r, pair[0].c);
+  const c2 = getCell(pair[1].r, pair[1].c);
+  c1.classList.add('hint-glow');
+  c2.classList.add('hint-glow');
+  setTimeout(() => { c1?.classList.remove('hint-glow'); c2?.classList.remove('hint-glow'); }, 1800);
+  updateUI();
+}
+
+function useShuffle() {
+  if (!gameActive || shufflesLeft <= 0) return;
+  shufflesLeft--;
+  const tiles = [], positions = [];
+  for (let r=0;r<rows;r++)
+    for (let c=0;c<cols;c++)
+      if (board[r][c] !== null) { tiles.push(board[r][c]); positions.push([r,c]); }
+
+  let attempts = 0;
+  do {
+    shuffle(tiles);
+    for (let i=0;i<positions.length;i++) board[positions[i][0]][positions[i][1]] = tiles[i];
+    attempts++;
+  } while (!findHint() && attempts < 80);
+
+  selected = null;
+  renderBoard(false);
+  updateUI();
+  saveGame();
+
+  if (!findHint()) {
+    gameActive = false;
+    clearInterval(timerIv);
+    clearSave();
+    document.getElementById('overlayTitle').textContent = '😢 無解了';
+    document.getElementById('overlaySub').textContent = `分數：${score}　剩餘：${tileCount()} 張`;
+    document.getElementById('overlay').classList.add('show');
+  }
+}
+
+// ── UI ──
+
+function updateUI() {
+  document.getElementById('sLevel').textContent = `${currentLevel+1} / ${LEVELS.length}`;
+  document.getElementById('sTimer').textContent = fmtTime(seconds);
+  document.getElementById('sScore').textContent = score;
+  document.getElementById('sCombo').textContent = combo;
+  document.getElementById('sRemain').textContent = tileCount();
+  document.getElementById('sHints').textContent = hintsLeft;
+}
+
+// ── Init ──
+
+window.addEventListener('load', () => {
+  updateContinueBtn();
+  const save = loadSave();
+  if (save) {
+    continueGame();
+  } else {
+    newGame();
+  }
+});
+
+window.addEventListener('resize', () => {
+  if (!gameActive) return;
+  tileSize = computeTileSize();
+  tileElements.forEach(el => {
+    el.style.width = tileSize + 'px';
+    el.style.height = tileSize + 'px';
+    el.style.fontSize = Math.round(tileSize * 0.6) + 'px';
+  });
+  const container = document.getElementById('game-container');
+  container.style.gridTemplateColumns = `repeat(${cols}, ${tileSize}px)`;
+  container.style.gridTemplateRows = `repeat(${rows}, ${tileSize}px)`;
+  resizeCanvas();
+});
+</script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"f4963943ac4543b78778626f114ead7c","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
