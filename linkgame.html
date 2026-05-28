@@ -665,7 +665,6 @@ function startLevel(initial) {
   updateUI();
   updateContinueBtn();
   initAudio();
-  startBGM();
 
   setTimeout(() => {
     if (!findHint() && tileCount() > 0) useShuffle();
@@ -809,8 +808,7 @@ function checkWin() {
       currentLevel++;
       hintsLeft = Math.min(hintsLeft + 1, 5);
       shufflesLeft = Math.min(shufflesLeft + 1, 3);
-      saveGame();
-      setTimeout(() => initLevel(true), 1200);
+      setTimeout(() => { initLevel(true); saveGame(); }, 1200);
     } else {
       sfxWin();
       stopBGM();
