@@ -42,6 +42,30 @@
     font-family: inherit; font-size: 14px; font-weight: bold;
   }
   #restartBtn:hover { background: #2a2a5a; }
+  #audioBtn {
+    background: #1a1a3a; color: #8cf; border: 1px solid #335;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: bold;
+    margin-right: 6px;
+  }
+  #audioBtn:hover { background: #2a2a5a; }
+  #logToggle {
+    background: #1a1a3a; color: #8cf; border: 1px solid #335;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: bold;
+    margin-left: 6px;
+  }
+  #logToggle:hover { background: #2a2a5a; }
+  #godModeBtn {
+    background: #1a1a3a; color: #8cf; border: 1px solid #335;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: bold;
+    margin-left: 6px;
+  }
+  #godModeBtn:hover { background: #2a2a5a; }
+  #godModeBtn.active {
+    background: #4a2a5a; border-color: #a5f; color: #f5a;
+  }
 </style>
 </head>
 <body>
@@ -49,10 +73,20 @@
 <div class="game-wrapper">
   <div class="hud">
     <div>🐝 得分 <span id="score">0</span></div>
+    <div>第 <span id="level">1</span> 關</div>
     <div>❤️ <span id="lives">3</span></div>
-    <div><button id="restartBtn">↻ 重來</button></div>
+    <div>
+      <button id="audioBtn">🔊</button>
+      <button id="restartBtn">↻ 重來</button>
+      <button id="logToggle">📋 日誌</button>
+      <button id="godModeBtn">🛡️ 無敵</button>
+    </div>
   </div>
   <canvas id="gameCanvas" width="600" height="480"></canvas>
+  <div id="logPanel" style="display:none; background:#0a0a1a; border:1px solid #335; padding:8px; margin-top:8px; font-family:monospace; font-size:11px; color:#8cf; max-height:200px; overflow-y:auto;">
+    <div id="logContent"></div>
+    <button id="downloadLogBtn" style="margin-top:8px; background:#1a1a3a; color:#8cf; border:1px solid #335; padding:4px 10px; border-radius:4px; cursor:pointer; font-family:inherit; font-size:11px;">⬇ 下載日誌</button>
+  </div>
   <div class="controls">
     <kbd>←</kbd> <kbd>→</kbd> 移動 &nbsp;·&nbsp; <kbd>Space</kbd> 射擊
   </div>
@@ -63,6 +97,224 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const scoreSpan = document.getElementById('score');
 const livesSpan = document.getElementById('lives');
+const levelSpan = document.getElementById('level');
+const audioBtn = document.getElementById('audioBtn');
+const logToggleBtn = document.getElementById('logToggle');
+const logPanel = document.getElementById('logPanel');
+const logContent = document.getElementById('logContent');
+const godModeBtn = document.getElementById('godModeBtn');
+let godMode = false;
+
+// ─── 日誌系統 ───
+let logEnabled = false;
+let gameLogs = [];
+const MAX_LOGS = 100;
+
+function log(msg, type = 'info') {
+  if (!logEnabled) return;
+  const now = new Date().toLocaleTimeString();
+  const icon = type === 'damage' ? '💥' : type === 'enemy' ? '👾' : type === 'system' ? '⚙️' : 'ℹ️';
+  const line = `[${now}] ${icon} ${msg}`;
+  gameLogs.push(line);
+  if (gameLogs.length > MAX_LOGS) gameLogs.shift();
+  logContent.innerHTML = gameLogs.join('<br>');
+  logPanel.scrollTop = logPanel.scrollHeight;
+}
+
+logToggleBtn.addEventListener('click', () => {
+  logEnabled = !logEnabled;
+  logToggleBtn.textContent = logEnabled ? '📋 隱藏' : '📋 日誌';
+  logPanel.style.display = logEnabled ? 'block' : 'none';
+  if (logEnabled) log('日誌系統已啟動', 'system');
+});
+
+document.getElementById('downloadLogBtn').addEventListener('click', () => {
+  const timestamp = new Date().toLocaleString();
+  const logText = gameLogs.join('\n');
+  const blob = new Blob([`# 小蜜蜂遊戲日誌\n# 時間：${timestamp}\n# 生命：${game.lives} | 得分：${game.score} | 關卡：${game.level}\n\n${logText}`], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `galaga-log-${Date.now()}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+godModeBtn.addEventListener('click', () => {
+  godMode = !godMode;
+  godModeBtn.classList.toggle('active', godMode);
+  godModeBtn.textContent = godMode ? '🛡️ 無敵 ON' : '🛡️ 無敵';
+  if (godMode) {
+    game.lives = 999;
+    playerInvincible = 9999; // 永久無敵
+    updateHUD();
+    log('無敵模式已開啟', 'system');
+  } else {
+    game.lives = 3;
+    playerInvincible = 0;
+    updateHUD();
+    log('無敵模式已關閉', 'system');
+  }
+});
+
+// ─── 音訊系統 ───
+let audioCtx = null;
+let masterGain = null;
+let musicGain = null;
+let sfxGain = null;
+let musicPlaying = false;
+let musicNodes = [];
+let audioEnabled = localStorage.getItem('sage-galaga-audio') !== 'false';
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.3;
+  masterGain.connect(audioCtx.destination);
+  musicGain = audioCtx.createGain();
+  musicGain.gain.value = 0.12;
+  musicGain.connect(masterGain);
+  sfxGain = audioCtx.createGain();
+  sfxGain.gain.value = 0.4;
+  sfxGain.connect(masterGain);
+}
+
+function toggleAudio() {
+  audioEnabled = !audioEnabled;
+  localStorage.setItem('sage-galaga-audio', String(audioEnabled));
+  audioBtn.textContent = audioEnabled ? '🔊' : '🔇';
+  if (masterGain) {
+    masterGain.gain.value = audioEnabled ? 0.3 : 0;
+  }
+  if (audioEnabled && audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function playNote(freq, duration, type, gainVal, dest, delay = 0) {
+  if (!audioCtx || !audioEnabled) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, audioCtx.currentTime + delay);
+  gain.gain.linearRampToValueAtTime(gainVal, audioCtx.currentTime + delay + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + delay + duration);
+  osc.connect(gain);
+  gain.connect(dest || sfxGain);
+  osc.start(audioCtx.currentTime + delay);
+  osc.stop(audioCtx.currentTime + delay + duration + 0.05);
+  if (dest === musicGain) musicNodes.push(osc);
+}
+
+function playNoise(duration, gainVal, dest, delay = 0) {
+  if (!audioCtx || !audioEnabled) return;
+  const bufferSize = audioCtx.sampleRate * duration;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buffer;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, audioCtx.currentTime + delay);
+  gain.gain.linearRampToValueAtTime(gainVal, audioCtx.currentTime + delay + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + delay + duration);
+  noise.connect(gain);
+  gain.connect(dest || sfxGain);
+  noise.start(audioCtx.currentTime + delay);
+}
+
+function startMusic() {
+  if (!audioCtx || musicPlaying) return;
+  musicPlaying = true;
+  const melody = [
+    [262, 0.25], [294, 0.25], [330, 0.25], [392, 0.25],
+    [440, 0.25], [392, 0.25], [330, 0.25], [294, 0.25],
+    [262, 0.5], [0, 0.25], [330, 0.25], [392, 0.5],
+    [440, 0.25], [523, 0.25], [440, 0.25], [392, 0.5],
+    [330, 0.5], [0, 0.25], [294, 0.25], [262, 0.5],
+    [0, 1.0]
+  ];
+  function scheduleLoop() {
+    if (!musicPlaying || !audioCtx) return;
+    let t = audioCtx.currentTime + 0.05;
+    for (const [freq, dur] of melody) {
+      if (freq > 0) {
+        playNote(freq, dur * 0.9, 'square', 0.08, musicGain);
+      }
+      t += dur;
+    }
+    const totalDur = melody.reduce((s, [, d]) => s + d, 0);
+    setTimeout(scheduleLoop, totalDur * 1000 - 100);
+  }
+  scheduleLoop();
+}
+
+function sfxShoot() {
+  if (!audioCtx || !audioEnabled) return;
+  playNote(880, 0.08, 'square', 0.15, sfxGain);
+  playNote(1200, 0.05, 'square', 0.08, sfxGain, 0.03);
+}
+
+function sfxEnemyHit() {
+  playNoise(0.1, 0.2, sfxGain);
+  playNote(200, 0.1, 'sawtooth', 0.1, sfxGain);
+}
+
+function sfxQueenHit() {
+  playNoise(0.15, 0.25, sfxGain);
+  playNote(150, 0.15, 'sawtooth', 0.15, sfxGain);
+  playNote(100, 0.2, 'square', 0.1, sfxGain, 0.05);
+}
+
+function sfxEnemyExplode() {
+  playNoise(0.2, 0.3, sfxGain);
+  playNote(80, 0.25, 'sawtooth', 0.15, sfxGain);
+  playNote(60, 0.3, 'square', 0.1, sfxGain, 0.1);
+}
+
+function sfxQueenExplode() {
+  playNoise(0.4, 0.35, sfxGain);
+  playNote(100, 0.4, 'sawtooth', 0.2, sfxGain);
+  playNote(60, 0.5, 'square', 0.15, sfxGain, 0.1);
+  playNote(40, 0.6, 'sine', 0.1, sfxGain, 0.2);
+}
+
+function sfxPlayerHit() {
+  playNoise(0.3, 0.35, sfxGain);
+  playNote(80, 0.3, 'sawtooth', 0.2, sfxGain);
+  playNote(50, 0.4, 'square', 0.15, sfxGain, 0.1);
+}
+
+function sfxGameOver() {
+  playNote(400, 0.3, 'square', 0.12, sfxGain);
+  playNote(350, 0.3, 'square', 0.1, sfxGain, 0.2);
+  playNote(300, 0.3, 'square', 0.1, sfxGain, 0.4);
+  playNote(200, 0.5, 'square', 0.08, sfxGain, 0.6);
+}
+
+function sfxWin() {
+  const notes = [523, 659, 784, 1047];
+  notes.forEach((f, i) => {
+    playNote(f, 0.2, 'square', 0.12, sfxGain, i * 0.15);
+  });
+  playNote(1047, 0.5, 'square', 0.1, sfxGain, 0.6);
+}
+
+audioBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  initAudio();
+  toggleAudio();
+});
+
+document.addEventListener('keydown', () => initAudio(), { once: true });
+document.addEventListener('click', () => initAudio(), { once: true });
+document.addEventListener('touchstart', () => initAudio(), { once: true });
 
 // ─── 尺寸常數 ───
 const W = 600, H = 480;
@@ -73,7 +325,10 @@ const BULLET_W = 4, BULLET_H = 14;
 const EB_W = 6, EB_H = 6;
 
 // ─── 遊戲狀態 ───
-let game = { score: 0, lives: 3, state: 'playing' };
+let game = { score: 0, lives: 3, level: 1, state: 'waiting' };
+let levelTransition = false;
+let levelTransitionTimer = 0;
+let playerInvincible = 0;
 
 // ─── 玩家 ───
 const player = {
@@ -122,15 +377,15 @@ function spawnParticles(x, y, color, count = 12) {
 // ─── 初始化敵人（含蜂后）───
 function initEnemies() {
   enemies = [];
-  const cols = 8, rows = 4;
-  const spacingX = 58, spacingY = 48;
+  const config = getLevelConfig(game.level);
+  const cols = config.cols, rows = config.rows;
+  const spacingX = Math.min(65, (W - 40) / cols), spacingY = 48;
   const startX = (W - (cols - 1) * spacingX) / 2 - BEE_W/2;
   const startY = 45;
 
   // 一般小蜂
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      // 中間兩隻換成蜂后？還是在最上方中間放蜂后
       enemies.push({
         type: 'worker',
         x: startX + c * spacingX,
@@ -139,60 +394,114 @@ function initEnemies() {
         alive: true,
         dir: 1,
         hp: 1,
+        baseX: startX + c * spacingX,
         baseY: startY + r * spacingY,
         anim: Math.random() * Math.PI * 2
       });
     }
   }
 
-  // 蜂后 — 放在陣型正上方中央
-  enemies.push({
-    type: 'queen',
-    x: W/2 - QUEEN_W/2,
-    y: 10,
-    w: QUEEN_W, h: QUEEN_H,
-    alive: true,
-    dir: 1,
-    hp: 5,
-    baseY: 10,
-    anim: 0,
-    // 俯衝攻擊狀態
-    diving: false,
-    diveTimer: 0,
-    diveCooldown: 0,
-    diveTargetX: 0,
-    diveTargetY: 0,
-    diveSpeed: 0,
-    diveMinions: [],     // 跟著俯衝的小蜂 index
-    warningFlash: 0
-  });
+  // 蜂后 — 分散在陣型上方
+  for (let q = 0; q < config.queens; q++) {
+    const queenX = W * (q + 1) / (config.queens + 1) - QUEEN_W/2;
+    enemies.push({
+      type: 'queen',
+      x: queenX,
+      y: 10 + q * 20,
+      w: QUEEN_W, h: QUEEN_H,
+      alive: true,
+      dir: 1,
+      hp: config.queenHP,
+      baseY: 10 + q * 20,
+      anim: Math.random() * Math.PI * 2,
+      // 俯衝攻擊狀態
+      diving: false,
+      diveTimer: 0,
+      diveCooldown: 0,
+      diveTargetX: 0,
+      diveTargetY: 0,
+      diveSpeed: 0,
+      diveMinions: [],
+      warningFlash: 0
+    });
+  }
+}
+
+// ─── 關卡配置 ───
+const LEVEL_CONFIGS = [
+  { cols: 8, rows: 4, queens: 1, speed: 0.8, diveChance: 0.008, diveMinions: 3, enemyFireRate: 0.012, queenHP: 5 },
+  { cols: 9, rows: 5, queens: 1, speed: 1.0, diveChance: 0.010, diveMinions: 3, enemyFireRate: 0.015, queenHP: 6 },
+  { cols: 10, rows: 5, queens: 2, speed: 1.2, diveChance: 0.012, diveMinions: 4, enemyFireRate: 0.018, queenHP: 7 },
+  { cols: 10, rows: 6, queens: 2, speed: 1.4, diveChance: 0.015, diveMinions: 4, enemyFireRate: 0.022, queenHP: 8 },
+  { cols: 11, rows: 6, queens: 3, speed: 1.6, diveChance: 0.018, diveMinions: 5, enemyFireRate: 0.028, queenHP: 10 }
+];
+
+function getLevelConfig(level) {
+  if (level <= LEVEL_CONFIGS.length) return LEVEL_CONFIGS[level - 1];
+  const last = LEVEL_CONFIGS[LEVEL_CONFIGS.length - 1];
+  return {
+    cols: Math.min(12, last.cols + Math.floor((level - 5) * 0.5)),
+    rows: Math.min(7, last.rows + Math.floor((level - 5) * 0.3)),
+    queens: Math.min(5, last.queens + Math.floor((level - 5) * 0.5)),
+    speed: Math.min(2.5, last.speed + (level - 5) * 0.2),
+    diveChance: Math.min(0.03, last.diveChance + (level - 5) * 0.003),
+    diveMinions: Math.min(6, last.diveMinions + Math.floor((level - 5) * 0.3)),
+    enemyFireRate: Math.min(0.04, last.enemyFireRate + (level - 5) * 0.005),
+    queenHP: Math.min(15, last.queenHP + (level - 5))
+  };
 }
 
 // ─── 重置 ───
 function resetGame() {
+  initAudio();
+  startMusic();
   game.score = 0;
   game.lives = 3;
-  game.state = 'playing';
+  game.level = 1;
+  game.state = 'waiting';
+  levelTransition = false;
+  playerInvincible = 0;
   player.x = W/2 - PLAYER_W/2;
   bullets = [];
   enemyBullets = [];
   particles = [];
   initEnemies();
   updateHUD();
+  log(`遊戲重置 - 第 ${game.level} 關（等待開始）`, 'system');
+}
+
+function nextLevel() {
+  game.level++;
+  game.state = 'playing';
+  levelTransition = false;
+  playerInvincible = 180; // 過關後 3 秒無敵
+  player.x = W/2 - PLAYER_W/2;
+  bullets = [];
+  enemyBullets = [];
+  initEnemies();
+  startMusic();
+  updateHUD();
+  log(`進入第 ${game.level} 關，給予 3 秒無敵`, 'system');
 }
 
 function updateHUD() {
   scoreSpan.textContent = game.score;
   livesSpan.textContent = game.lives;
+  levelSpan.textContent = game.level;
+  audioBtn.textContent = audioEnabled ? '🔊' : '🔇';
 }
 
 // ─── 射擊 ───
 function shoot() {
-  bullets.push({
-    x: player.x + player.w/2 - BULLET_W/2,
-    y: player.y - BULLET_H,
-    w: BULLET_W, h: BULLET_H
-  });
+  for (let i = 0; i < game.lives; i++) {
+    const offsetX = (i - (game.lives - 1) / 2) * 50;
+    bullets.push({
+      x: player.x + offsetX + player.w/2 - BULLET_W/2,
+      y: player.y - BULLET_H,
+      w: BULLET_W, h: BULLET_H
+    });
+  }
+  sfxShoot();
 }
 
 function enemyShoot(ex, ey) {
@@ -209,11 +518,30 @@ function rectCollide(a, b) {
 
 // ─── 玩家被擊中 ───
 function playerHit() {
+  if (godMode || playerInvincible > 0) {
+    if (godMode) {
+      log(`無敵模式中，忽略傷害 (生命：${game.lives})`, 'info');
+    } else {
+      log(`無敵中，忽略傷害 (生命：${game.lives})`, 'info');
+    }
+    return;
+  }
   game.lives--;
+  playerInvincible = 180; // 3 秒無敵（180 幀）
+  log(`玩家受傷！生命：${game.lives} (無敵：${playerInvincible}幀)`, 'damage');
   spawnParticles(player.x + player.w/2, player.y + player.h/2, '#4af', 20);
+  sfxPlayerHit();
   updateHUD();
   if (game.lives <= 0) {
     game.state = 'gameover';
+    sfxGameOver();
+    if (musicPlaying && musicNodes) {
+      musicNodes.forEach(n => { try { n.stop(); } catch(e) {} });
+      musicNodes = [];
+      musicPlaying = false;
+    }
+    log('GAME OVER - 生命耗盡', 'damage');
+    log(`最終狀態：生命 0 | 得分 ${game.score} | 關卡 ${game.level}`, 'system');
   }
 }
 
@@ -226,6 +554,7 @@ function getAliveWorkers() {
 function updateQueen(queen) {
   if (!queen.alive) return;
   queen.anim += 0.03;
+  const config = getLevelConfig(game.level);
 
   // 閃爍效果
   if (queen.warningFlash > 0) queen.warningFlash -= 0.05;
@@ -245,11 +574,12 @@ function updateQueen(queen) {
       queen.diving = false;
       queen.diveCooldown = 180; // 3秒冷卻
       queen.y = queen.baseY;
-      queen.x = W/2 - QUEEN_W/2;
+      queen.x = queen.x; // 保持在当前位置
       // 歸還小蜂
       for (const idx of queen.diveMinions) {
         const minion = enemies[idx];
         if (minion && minion.alive) {
+          minion.x = minion.baseX;
           minion.y = minion.baseY;
         }
       }
@@ -280,7 +610,7 @@ function updateQueen(queen) {
 
     // 發動俯衝 — 當還有小蜂活著的時候
     const workers = getAliveWorkers();
-    if (workers.length > 0 && Math.random() < 0.008) {
+    if (workers.length > 0 && Math.random() < config.diveChance) {
       queen.diving = true;
       queen.warningFlash = 1;
       // 鎖定玩家 x 方向
@@ -288,8 +618,8 @@ function updateQueen(queen) {
       queen.diveSpeed = (targetX - queen.x) * 0.03;
       queen.diveSpeed = Math.max(-3, Math.min(3, queen.diveSpeed));
 
-      // 帶 2~3 隻小蜂
-      const numMinions = Math.min(3, workers.length);
+      // 帶小蜂
+      const numMinions = Math.min(config.diveMinions, workers.length);
       const shuffled = [...workers];
       for (let i = shuffled.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -306,12 +636,31 @@ function updateQueen(queen) {
 
 // ─── 更新邏輯 ───
 function update() {
-  if (game.state !== 'playing') return;
+  if (game.state === 'waiting') {
+    // 等待開始
+    if (keys.left || keys.right || keys.space) {
+      game.state = 'playing';
+      log('遊戲開始！', 'system');
+      return;
+    }
+    return;
+  }
+  if (game.state !== 'playing' && game.state !== 'levelcomplete') return;
+  if (game.state === 'levelcomplete') {
+    levelTransitionTimer--;
+    if (levelTransitionTimer <= 0) {
+      nextLevel();
+    }
+    return;
+  }
 
   // 1. 玩家移動
   if (keys.left)  player.x -= player.speed;
   if (keys.right) player.x += player.speed;
   player.x = Math.max(0, Math.min(W - player.w, player.x));
+
+  // 1.5. 無敵計時
+  if (playerInvincible > 0) playerInvincible--;
 
   // 2. 射擊
   const now = Date.now();
@@ -329,13 +678,19 @@ function update() {
   }
 
   // 4. 敵人集體移動（只移動非俯衝中的小蜂和蜂后由獨立 AI 控制）
+  const config = getLevelConfig(game.level);
   let edgeHit = false;
   for (const e of enemies) {
     if (!e.alive) continue;
     if (e.type === 'queen') continue; // 蜂后獨立控制
     if (e.divingMinion) continue;      // 俯衝中的小蜂
-    e.x += e.dir * 0.8;
+    e.x += e.dir * config.speed;
     if (e.x <= 3 || e.x + e.w >= W - 3) edgeHit = true;
+    // 限制敵人不能低於屏幕 2/3 處
+    if (e.y + e.h > H * 0.65) {
+      e.y = H * 0.65 - e.h;
+      e.baseY = e.y;
+    }
   }
   if (edgeHit) {
     for (const e of enemies) {
@@ -344,32 +699,52 @@ function update() {
       e.dir *= -1;
       e.y += 8;
       e.baseY = e.y;
+      // 確保邊界碰撞後不會超出限制
+      if (e.y + e.h > H * 0.65) {
+        e.y = H * 0.65 - e.h;
+        e.baseY = e.y;
+      }
     }
   }
 
   // 5. 蜂后 AI
-  const queen = enemies.find(e => e.type === 'queen');
-  if (queen) updateQueen(queen);
+  const queens = enemies.filter(e => e.type === 'queen');
+  for (const queen of queens) {
+    if (queen.alive) updateQueen(queen);
+  }
 
   // 6. 敵人射擊（一般小蜂）
   const workers = getAliveWorkers().filter(w => !w.divingMinion);
-  if (workers.length > 0 && Math.random() < 0.015) {
+  if (workers.length > 0 && Math.random() < config.enemyFireRate) {
     const shooter = workers[Math.floor(Math.random() * workers.length)];
     enemyShoot(shooter.x + shooter.w/2, shooter.y + shooter.h);
+    if (logEnabled && game.level >= 3) {
+      log(`敵人射擊！子彈數：${enemyBullets.length}`, 'enemy');
+    }
   }
   // 蜂后射擊（俯衝時已處理，平時也偶爾射）
-  if (queen && queen.alive && !queen.diving && Math.random() < 0.008) {
-    enemyShoot(queen.x + queen.w/2, queen.y + queen.h);
+  for (const queen of queens) {
+    if (queen && queen.alive && !queen.diving && Math.random() < 0.008) {
+      enemyShoot(queen.x + queen.w/2, queen.y + queen.h);
+    }
   }
 
-  // 7. 敵人子彈碰撞玩家
+  // 7. 敵人子彈碰撞玩家（無敵期間縮小碰撞箱）
+  const hitboxScale = playerInvincible > 0 ? 0.5 : 1;
+  const hitboxX = player.x + player.w/2 * (1 - hitboxScale);
+  const hitboxY = player.y + player.h/2 * (1 - hitboxScale);
+  const hitboxW = player.w * hitboxScale;
+  const hitboxH = player.h * hitboxScale;
+  const playerHitbox = { x: hitboxX, y: hitboxY, w: hitboxW, h: hitboxH };
+
   for (let i = enemyBullets.length - 1; i >= 0; i--) {
     enemyBullets[i].y += 4.5;
     if (enemyBullets[i].y > H) {
       enemyBullets.splice(i, 1);
       continue;
     }
-    if (rectCollide(player, enemyBullets[i])) {
+    if (rectCollide(playerHitbox, enemyBullets[i])) {
+      log(`被敵人子彈擊中！無敵：${playerInvincible > 0 ? '是' : '否'}`, 'damage');
       enemyBullets.splice(i, 1);
       playerHit();
       if (game.state !== 'playing') return;
@@ -389,14 +764,17 @@ function update() {
             game.score += 100;
             spawnParticles(e.x + e.w/2, e.y + e.h/2, '#f5c842', 30);
             spawnParticles(e.x + e.w/2, e.y + e.h/2, '#ff0', 20);
+            sfxQueenExplode();
           } else {
             const bonus = Math.floor((e.baseY - 30) / 10) * 2;
             game.score += 10 + bonus;
             spawnParticles(e.x + e.w/2, e.y + e.h/2, '#f5c842', 8);
+            sfxEnemyExplode();
           }
           updateHUD();
         } else {
-          // 被打到但沒死 → 閃白特效
+          if (e.type === 'queen') sfxQueenHit();
+          else sfxEnemyHit();
           spawnParticles(e.x + e.w/2, e.y + e.h/2, '#fff', 4);
         }
         hit = true;
@@ -408,33 +786,39 @@ function update() {
     }
   }
 
-  // 9. 敵人碰撞玩家
-  for (const e of enemies) {
-    if (!e.alive) continue;
-    if (rectCollide(player, e)) {
-      e.alive = false;
-      spawnParticles(e.x + e.w/2, e.y + e.h/2, '#f5c842', 15);
-      playerHit();
-      if (game.state !== 'playing') return;
+  // 9. 敵人碰撞玩家（無敵期間完全無視碰撞）
+  if (playerInvincible <= 0) {
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (rectCollide(playerHitbox, e)) {
+        const enemyType = e.type === 'queen' ? '蜂后' : '小蜂';
+        log(`敵人撞擊！(${enemyType})`, 'enemy');
+        e.alive = false;
+        spawnParticles(e.x + e.w/2, e.y + e.h/2, '#f5c842', 15);
+        playerHit();
+        if (game.state !== 'playing') return;
+      }
     }
   }
 
-  // 10. 敵人到底部
-  for (const e of enemies) {
-    if (!e.alive) continue;
-    if (e.y + e.h >= player.y + 5) {
-      game.state = 'gameover';
-      return;
-    }
-  }
-
-  // 11. 勝利條件
+  // 10. 勝利條件
   const aliveEnemies = enemies.filter(e => e.alive);
   if (aliveEnemies.length === 0) {
-    game.state = 'win';
+    sfxWin();
+    if (musicPlaying && musicNodes) {
+      musicNodes.forEach(n => { try { n.stop(); } catch(e) {} });
+      musicNodes = [];
+      musicPlaying = false;
+    }
+    if (game.level >= 5) {
+      game.state = 'win';
+    } else {
+      levelTransitionTimer = 120; // 2秒過場
+      game.state = 'levelcomplete';
+    }
   }
 
-  // 12. 粒子更新
+  // 13. 粒子更新
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx;
@@ -656,6 +1040,19 @@ function draw() {
   ctx.fillStyle = '#07071a';
   ctx.fillRect(0, 0, W, H);
 
+  // 等待開始
+  if (game.state === 'waiting') {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('小蜜蜂射擊遊戲', W/2, H/2 - 40);
+    ctx.font = '16px Arial';
+    ctx.fillStyle = '#8cf';
+    ctx.fillText('按任意方向鍵或空白鍵開始', W/2, H/2 + 10);
+    ctx.fillText('← → 移動 | 空白鍵 射擊', W/2, H/2 + 40);
+    return;
+  }
+
   // 星星
   for (const s of stars) {
     const bright = 0.3 + Math.sin(s.x + s.y + Date.now() * 0.001) * 0.3;
@@ -678,9 +1075,15 @@ function draw() {
     }
   }
 
-  // 玩家
+  // 玩家（根據剩餘生命顯示多架飛機）
   if (game.state !== 'gameover') {
-    drawPlayer(ctx, player.x, player.y, player.w, player.h);
+    const blink = playerInvincible > 0 && Math.floor(playerInvincible / 4) % 2 === 0;
+    if (!blink) {
+      for (let i = 0; i < game.lives; i++) {
+        const offsetX = (i - (game.lives - 1) / 2) * 50;
+        drawPlayer(ctx, player.x + offsetX, player.y, player.w, player.h);
+      }
+    }
   }
 
   // 玩家子彈
@@ -724,13 +1127,25 @@ function draw() {
     ctx.fillText('按下「重來」繼續', W/2, H/2 + 40);
   }
 
+  if (game.state === 'levelcomplete') {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ff0';
+    ctx.font = 'bold 36px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`第 ${game.level} 關通過！`, W/2, H/2 - 10);
+    ctx.fillStyle = '#8cf';
+    ctx.font = '18px "Courier New", monospace';
+    ctx.fillText(`準備進入第 ${game.level + 1} 關...`, W/2, H/2 + 30);
+  }
+
   if (game.state === 'win') {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#4f4';
     ctx.font = 'bold 40px "Courier New", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('🎉 你贏了！', W/2, H/2 - 10);
+    ctx.fillText('🎉 全部關卡通過！', W/2, H/2 - 10);
     ctx.fillStyle = '#8cf';
     ctx.font = '18px "Courier New", monospace';
     ctx.fillText('按下「重來」再玩一次', W/2, H/2 + 40);
